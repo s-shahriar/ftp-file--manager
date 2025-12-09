@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Service
+MimeType=all/allfiles;inode/directory;
+Actions=sendtoftp
+
+[Desktop Action sendtoftp]
+Name=Send to FTP Server
+Icon=folder-remote
+Exec=/path/to/ftpsend.py %F
