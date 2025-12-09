@@ -14,8 +14,8 @@ import time
 from pathlib import Path
 
 # Default FTP settings - Change these to your FTP server
-DEFAULT_HOST = "192.168.1.100"  # Your FTP server IP
-DEFAULT_PORT = 2121             # Your FTP server port
+DEFAULT_HOST = "192.168.0.101"  # Your FTP server IP
+DEFAULT_PORT = 9999             # Your FTP server port
 DEFAULT_USER = "anonymous"
 DEFAULT_PASS = ""
 
@@ -26,7 +26,7 @@ class FTPManager:
         self.connected = False
         self.host = DEFAULT_HOST
         self.port = DEFAULT_PORT
-        self.local_dir = Path.home()  # Start in home directory
+        self.local_dir = Path.home() / "Downloads"  # Start in Downloads
         self.remote_dir = "/"
         self.remote_files = []
         self.local_files = []
@@ -599,16 +599,19 @@ class FTPManager:
                 scroll = min(len(lines) - visible_lines, scroll + visible_lines)
 
     def set_server(self):
-        new_host = self.get_input(f"Host [{self.host}]: ")
+        # Prefill with current IP for easy editing (just change last octet)
+        new_host = self.get_input("Server IP: ", self.host)
         if new_host:
             self.host = new_host
-        new_port = self.get_input(f"Port [{self.port}]: ")
+
+        # Only ask for port if user wants to change it
+        new_port = self.get_input("Port: ", str(self.port))
         if new_port:
             try:
                 self.port = int(new_port)
             except ValueError:
                 pass
-        self.set_message(f"Server: {self.host}:{self.port}", "info")
+        self.set_message(f"Server set to {self.host}:{self.port}", "info")
 
     def draw(self):
         self.stdscr.clear()
@@ -942,7 +945,13 @@ def main(stdscr):
                     pass
             else:
                 manager.host = arg
-        manager.connect()
+
+    # Auto-connect on startup
+    manager.connect()
+
+    # If connection failed, prompt for server address
+    if not manager.connected:
+        manager.set_message("Connection failed. Press 's' to set server address.", "error")
 
     manager.run()
 

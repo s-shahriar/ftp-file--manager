@@ -10,8 +10,8 @@ import os
 from pathlib import Path
 
 # Default FTP settings - Change these to your FTP server
-HOST = "192.168.1.100"  # Your FTP server IP
-PORT = 2121             # Your FTP server port
+HOST = "192.168.0.101"  # Your FTP server IP
+PORT = 9999             # Your FTP server port
 USER = "anonymous"
 PASS = ""
 
