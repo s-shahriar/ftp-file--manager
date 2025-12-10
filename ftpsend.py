@@ -84,6 +84,43 @@ def draw_section(title, color=CYAN):
     width = min(get_terminal_width() - 4, 58)
     print(f"  {color}{BOLD}{'─' * 3} {title} {'─' * (width - len(title) - 5)}{RESET}")
 
+def get_input(prompt, default=""):
+    """Get user input with optional default value prefilled"""
+    if default:
+        print(f"  {prompt}{DIM}(current: {default}){RESET}")
+        print(f"  {CYAN}>{RESET} ", end="")
+        try:
+            value = input().strip()
+            return value if value else default
+        except (EOFError, KeyboardInterrupt):
+            return default
+    else:
+        print(f"  {prompt}")
+        print(f"  {CYAN}>{RESET} ", end="")
+        try:
+            return input().strip()
+        except (EOFError, KeyboardInterrupt):
+            return ""
+
+def change_server():
+    """Let user change server settings"""
+    global HOST, PORT
+    print()
+    draw_section("CHANGE SERVER", YELLOW)
+
+    new_host = get_input("Server IP:", HOST)
+    if new_host:
+        HOST = new_host
+
+    new_port = get_input("Port:", str(PORT))
+    if new_port:
+        try:
+            PORT = int(new_port)
+        except ValueError:
+            pass
+
+    print(f"\n  {GREEN}✓{RESET} Server set to {HOST}:{PORT}")
+
 def progress_bar(current, total, filename, start_time, width=30):
     percent = current / total if total > 0 else 1
     filled = int(width * percent)
@@ -278,24 +315,49 @@ def send_files(items):
 
     print(f"\n    {DIM}Total: {total_files} file(s), {format_size(total_size)}{RESET}")
 
-    # Connect
-    print()
-    draw_section("CONNECTING", YELLOW)
-    print(f"    {YELLOW}⟳{RESET} Connecting to {HOST}:{PORT}...")
+    # Connect with retry option
+    ftp = None
+    while True:
+        print()
+        draw_section("CONNECTING", YELLOW)
+        print(f"    {YELLOW}⟳{RESET} Connecting to {HOST}:{PORT}...")
 
-    overall_start = time.time()
+        overall_start = time.time()
+
+        try:
+            ftp = ftplib.FTP()
+            ftp.connect(HOST, PORT, timeout=10)
+            ftp.login(USER, PASS)
+            print(f"    {GREEN}✓{RESET} Connected successfully!\n")
+            break  # Connection successful, exit loop
+        except Exception as e:
+            print(f"    {RED}✗ Connection failed: {e}{RESET}")
+            print(f"\n  {YELLOW}Options:{RESET}")
+            print(f"    {WHITE}s{RESET} - Change server address and retry")
+            print(f"    {WHITE}r{RESET} - Retry with current settings")
+            print(f"    {WHITE}q{RESET} - Quit")
+            print(f"\n  {CYAN}>{RESET} ", end="")
+
+            try:
+                choice = input().strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                choice = 'q'
+
+            if choice == 's':
+                change_server()
+                continue
+            elif choice == 'r':
+                continue
+            else:
+                sys.exit(1)
+
+    # Transfer files
+    draw_section("TRANSFERRING", GREEN)
+
+    success = 0
+    errors = 0
 
     try:
-        ftp = ftplib.FTP()
-        ftp.connect(HOST, PORT, timeout=10)
-        ftp.login(USER, PASS)
-        print(f"    {GREEN}✓{RESET} Connected successfully!\n")
-
-        draw_section("TRANSFERRING", GREEN)
-
-        success = 0
-        errors = 0
-
         for path in valid_items:
             if cancelled:
                 break
@@ -336,7 +398,7 @@ def send_files(items):
             print(f"\n  {DIM}Closing...{RESET}")
             time.sleep(1)
         else:
-            print(f"    {RED}✗ Connection failed: {e}{RESET}")
+            print(f"    {RED}✗ Transfer error: {e}{RESET}")
             print(f"\n  {DIM}Press Enter to close...{RESET}")
             input()
         sys.exit(1)
