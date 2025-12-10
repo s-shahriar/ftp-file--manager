@@ -8,7 +8,12 @@ import sys
 import ftplib
 import os
 import time
+import signal
+import threading
 from pathlib import Path
+
+# Global cancel flag
+cancelled = False
 
 # Default FTP settings - Change these to your FTP server
 HOST = "192.168.0.103"  # Your FTP server IP
@@ -38,6 +43,14 @@ BOX_BR = '╯'
 
 def clear_screen():
     print('\033[2J\033[H', end='')
+
+def handle_cancel(signum, frame):
+    """Handle Ctrl+C to cancel transfer"""
+    global cancelled
+    cancelled = True
+    print(f"\n\n  {YELLOW}⚠ Cancelling transfer...{RESET}")
+
+signal.signal(signal.SIGINT, handle_cancel)
 
 def get_terminal_width():
     try:
@@ -109,11 +122,17 @@ def ensure_remote_dir(ftp, remote_path):
 
 def upload_file(ftp, local_path, remote_dir=""):
     """Upload a single file with progress bar"""
+    global cancelled
+    if cancelled:
+        raise Exception("Cancelled")
+
     file_size = local_path.stat().st_size
     uploaded = [0]
     start_time = time.time()
 
     def callback(data):
+        if cancelled:
+            raise Exception("Cancelled")
         uploaded[0] += len(data)
         progress_bar(uploaded[0], file_size, local_path.name, start_time)
 
@@ -131,6 +150,10 @@ def upload_file(ftp, local_path, remote_dir=""):
 
 def upload_folder(ftp, folder_path, base_remote=""):
     """Recursively upload a folder"""
+    global cancelled
+    if cancelled:
+        return 0, 0
+
     folder_name = folder_path.name
     remote_base = f"{base_remote}/{folder_name}" if base_remote else folder_name
 
@@ -142,13 +165,17 @@ def upload_folder(ftp, folder_path, base_remote=""):
     items = sorted(folder_path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
 
     for item in items:
+        if cancelled:
+            break
         if item.is_file():
             try:
                 upload_file(ftp, item, remote_base)
                 files_uploaded += 1
             except Exception as e:
-                print(f" {RED}✗ {e}{RESET}")
-                errors += 1
+                if "Cancelled" not in str(e):
+                    print(f" {RED}✗ {e}{RESET}")
+                    errors += 1
+                break
         elif item.is_dir():
             sub_uploaded, sub_errors = upload_folder(ftp, item, remote_base)
             files_uploaded += sub_uploaded
@@ -169,10 +196,14 @@ def collect_stats(path):
             total_size += item.stat().st_size
     return total_files, total_size
 
-def draw_result_box(success, errors, total_time):
+def draw_result_box(success, errors, total_time, was_cancelled=False):
     width = min(get_terminal_width() - 2, 60)
 
-    if errors == 0:
+    if was_cancelled:
+        color = YELLOW
+        icon = "⚠"
+        status = "TRANSFER CANCELLED"
+    elif errors == 0:
         color = GREEN
         icon = "✓"
         status = "TRANSFER COMPLETE"
@@ -189,9 +220,12 @@ def draw_result_box(success, errors, total_time):
     print(f"  {color}{BOX_V}{RESET}{' ' * padding}{color}{BOLD}{status_line}{RESET}{' ' * (width - len(status_line) - padding - 2)}{color}{BOX_V}{RESET}")
 
     # Stats line
-    stats = f"{success} file(s) sent"
-    if errors > 0:
-        stats += f", {errors} failed"
+    if was_cancelled:
+        stats = f"{success} file(s) sent before cancel"
+    else:
+        stats = f"{success} file(s) sent"
+        if errors > 0:
+            stats += f", {errors} failed"
     stats += f" in {total_time:.1f}s"
     padding = (width - len(stats) - 2) // 2
     print(f"  {color}{BOX_V}{RESET}{' ' * padding}{DIM}{stats}{RESET}{' ' * (width - len(stats) - padding - 2)}{color}{BOX_V}{RESET}")
@@ -199,8 +233,11 @@ def draw_result_box(success, errors, total_time):
     print(f"  {color}{BOX_BL}{BOX_H * (width - 2)}{BOX_BR}{RESET}")
 
 def send_files(items):
+    global cancelled
     clear_screen()
     draw_header()
+
+    print(f"  {DIM}(Press Ctrl+C to cancel transfer){RESET}\n")
 
     if not items:
         print(f"  {YELLOW}Usage: ftpsend <file1> [folder1] [file2] ...{RESET}")
@@ -260,31 +297,49 @@ def send_files(items):
         errors = 0
 
         for path in valid_items:
+            if cancelled:
+                break
             if path.is_file():
                 try:
                     upload_file(ftp, path)
                     success += 1
                 except Exception as e:
-                    print(f" {RED}✗ {e}{RESET}")
-                    errors += 1
+                    if "Cancelled" not in str(e):
+                        print(f" {RED}✗ {e}{RESET}")
+                        errors += 1
+                    break
             elif path.is_dir():
                 uploaded, errs = upload_folder(ftp, path)
                 success += uploaded
                 errors += errs
 
-        ftp.quit()
+        try:
+            ftp.quit()
+        except:
+            pass
 
         total_time = time.time() - overall_start
-        draw_result_box(success, errors, total_time)
+        draw_result_box(success, errors, total_time, cancelled)
+
+        # Auto-close on cancel, wait for Enter on success
+        if cancelled:
+            print(f"\n  {DIM}Closing...{RESET}")
+            time.sleep(1)
+        else:
+            print(f"\n  {DIM}Press Enter to close...{RESET}")
+            input()
 
     except Exception as e:
-        print(f"    {RED}✗ Connection failed: {e}{RESET}")
-        print(f"\n  {DIM}Press Enter to close...{RESET}")
-        input()
+        if "Cancelled" in str(e):
+            total_time = time.time() - overall_start
+            draw_result_box(0, 0, total_time, True)
+            print(f"\n  {DIM}Closing...{RESET}")
+            time.sleep(1)
+        else:
+            print(f"    {RED}✗ Connection failed: {e}{RESET}")
+            print(f"\n  {DIM}Press Enter to close...{RESET}")
+            input()
         sys.exit(1)
-
-    print(f"\n  {DIM}Press Enter to close...{RESET}")
-    input()
 
 if __name__ == "__main__":
     send_files(sys.argv[1:])
