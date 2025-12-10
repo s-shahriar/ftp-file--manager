@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 # Default FTP settings - Change these to your FTP server
-DEFAULT_HOST = "192.168.0.101"  # Your FTP server IP
+DEFAULT_HOST = "192.168.0.103"  # Your FTP server IP
 DEFAULT_PORT = 9999             # Your FTP server port
 DEFAULT_USER = "anonymous"
 DEFAULT_PASS = ""
