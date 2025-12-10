@@ -7,6 +7,7 @@ Usage: ftpsend file1 folder1 file2 ...
 import sys
 import ftplib
 import os
+import time
 from pathlib import Path
 
 # Default FTP settings - Change these to your FTP server
@@ -15,34 +16,79 @@ PORT = 9999             # Your FTP server port
 USER = "anonymous"
 PASS = ""
 
-# ANSI colors
+# ANSI colors and styles
 GREEN = '\033[92m'
 RED = '\033[91m'
 YELLOW = '\033[93m'
 CYAN = '\033[96m'
 BLUE = '\033[94m'
+MAGENTA = '\033[95m'
+WHITE = '\033[97m'
 BOLD = '\033[1m'
 DIM = '\033[2m'
 RESET = '\033[0m'
 
+# Box drawing characters
+BOX_H = '─'
+BOX_V = '│'
+BOX_TL = '╭'
+BOX_TR = '╮'
+BOX_BL = '╰'
+BOX_BR = '╯'
+
+def clear_screen():
+    print('\033[2J\033[H', end='')
+
+def get_terminal_width():
+    try:
+        return os.get_terminal_size().columns
+    except:
+        return 60
+
 def format_size(size):
     for unit in ['B', 'KB', 'MB', 'GB']:
         if size < 1024:
-            return f"{size:.1f}{unit}"
+            return f"{size:.1f} {unit}"
         size /= 1024
-    return f"{size:.1f}TB"
+    return f"{size:.1f} TB"
 
-def progress_bar(current, total, filename, width=35):
+def draw_header():
+    width = min(get_terminal_width() - 2, 60)
+
+    print(f"\n  {CYAN}{BOLD}{BOX_TL}{BOX_H * (width - 2)}{BOX_TR}{RESET}")
+
+    title = "📤  FTP FILE SENDER"
+    padding = (width - len(title) - 4) // 2
+    print(f"  {CYAN}{BOX_V}{RESET}{' ' * padding}{WHITE}{BOLD}{title}{RESET}{' ' * (width - len(title) - padding - 4)}{CYAN}{BOX_V}{RESET}")
+
+    server_info = f"Server: {HOST}:{PORT}"
+    padding = (width - len(server_info) - 2) // 2
+    print(f"  {CYAN}{BOX_V}{RESET}{' ' * padding}{DIM}{server_info}{RESET}{' ' * (width - len(server_info) - padding - 2)}{CYAN}{BOX_V}{RESET}")
+
+    print(f"  {CYAN}{BOX_BL}{BOX_H * (width - 2)}{BOX_BR}{RESET}\n")
+
+def draw_section(title, color=CYAN):
+    width = min(get_terminal_width() - 4, 58)
+    print(f"  {color}{BOLD}{'─' * 3} {title} {'─' * (width - len(title) - 5)}{RESET}")
+
+def progress_bar(current, total, filename, start_time, width=30):
     percent = current / total if total > 0 else 1
     filled = int(width * percent)
     bar = '█' * filled + '░' * (width - filled)
+
+    # Calculate speed
+    elapsed = time.time() - start_time
+    speed = current / elapsed if elapsed > 0 else 0
+    speed_str = f"{format_size(speed)}/s"
+
+    # Size info
     size_info = f"{format_size(current)}/{format_size(total)}"
 
     # Truncate filename if too long
-    max_name = 22
+    max_name = 20
     display_name = filename[:max_name-2] + '..' if len(filename) > max_name else filename
 
-    sys.stdout.write(f'\r  {display_name:<22} {CYAN}[{bar}]{RESET} {percent:>6.1%} {DIM}{size_info}{RESET}')
+    sys.stdout.write(f'\r    {WHITE}{display_name:<20}{RESET} {CYAN}[{bar}]{RESET} {GREEN}{percent:>5.1%}{RESET} {DIM}{size_info} @ {speed_str}{RESET}')
     sys.stdout.flush()
 
 def ensure_remote_dir(ftp, remote_path):
@@ -59,16 +105,17 @@ def ensure_remote_dir(ftp, remote_path):
             try:
                 ftp.mkd(current)
             except ftplib.error_perm:
-                pass  # Directory might already exist
+                pass
 
 def upload_file(ftp, local_path, remote_dir=""):
     """Upload a single file with progress bar"""
     file_size = local_path.stat().st_size
     uploaded = [0]
+    start_time = time.time()
 
     def callback(data):
         uploaded[0] += len(data)
-        progress_bar(uploaded[0], file_size, local_path.name)
+        progress_bar(uploaded[0], file_size, local_path.name, start_time)
 
     if remote_dir:
         ensure_remote_dir(ftp, remote_dir)
@@ -77,21 +124,21 @@ def upload_file(ftp, local_path, remote_dir=""):
     with open(local_path, 'rb') as f:
         ftp.storbinary(f'STOR {local_path.name}', f, blocksize=8192, callback=callback)
 
-    # Return to root
     ftp.cwd('/')
-    print(f" {GREEN}✓{RESET}")
+
+    elapsed = time.time() - start_time
+    print(f" {GREEN}✓{RESET} {DIM}({elapsed:.1f}s){RESET}")
 
 def upload_folder(ftp, folder_path, base_remote=""):
     """Recursively upload a folder"""
     folder_name = folder_path.name
     remote_base = f"{base_remote}/{folder_name}" if base_remote else folder_name
 
-    print(f"\n  {BLUE}📁 {folder_name}/{RESET}")
+    print(f"\n    {BLUE}📁 {BOLD}{folder_name}/{RESET}")
 
     files_uploaded = 0
     errors = 0
 
-    # Get all items sorted (folders first, then files)
     items = sorted(folder_path.iterdir(), key=lambda x: (x.is_file(), x.name.lower()))
 
     for item in items:
@@ -103,7 +150,6 @@ def upload_folder(ftp, folder_path, base_remote=""):
                 print(f" {RED}✗ {e}{RESET}")
                 errors += 1
         elif item.is_dir():
-            # Recursive call for subdirectories
             sub_uploaded, sub_errors = upload_folder(ftp, item, remote_base)
             files_uploaded += sub_uploaded
             errors += sub_errors
@@ -123,22 +169,58 @@ def collect_stats(path):
             total_size += item.stat().st_size
     return total_files, total_size
 
+def draw_result_box(success, errors, total_time):
+    width = min(get_terminal_width() - 2, 60)
+
+    if errors == 0:
+        color = GREEN
+        icon = "✓"
+        status = "TRANSFER COMPLETE"
+    else:
+        color = YELLOW
+        icon = "⚠"
+        status = "TRANSFER FINISHED WITH ERRORS"
+
+    print(f"\n  {color}{BOX_TL}{BOX_H * (width - 2)}{BOX_TR}{RESET}")
+
+    # Status line
+    status_line = f"{icon}  {status}"
+    padding = (width - len(status_line) - 2) // 2
+    print(f"  {color}{BOX_V}{RESET}{' ' * padding}{color}{BOLD}{status_line}{RESET}{' ' * (width - len(status_line) - padding - 2)}{color}{BOX_V}{RESET}")
+
+    # Stats line
+    stats = f"{success} file(s) sent"
+    if errors > 0:
+        stats += f", {errors} failed"
+    stats += f" in {total_time:.1f}s"
+    padding = (width - len(stats) - 2) // 2
+    print(f"  {color}{BOX_V}{RESET}{' ' * padding}{DIM}{stats}{RESET}{' ' * (width - len(stats) - padding - 2)}{color}{BOX_V}{RESET}")
+
+    print(f"  {color}{BOX_BL}{BOX_H * (width - 2)}{BOX_BR}{RESET}")
+
 def send_files(items):
+    clear_screen()
+    draw_header()
+
     if not items:
-        print(f"{YELLOW}Usage: ftpsend <file1> [folder1] [file2] ...{RESET}")
+        print(f"  {YELLOW}Usage: ftpsend <file1> [folder1] [file2] ...{RESET}")
+        print(f"\n  {DIM}Press Enter to close...{RESET}")
+        input()
         sys.exit(1)
 
-    # Validate items first
+    # Validate items
     valid_items = []
     for item in items:
         path = Path(item)
         if not path.exists():
-            print(f"{RED}✗ Not found: {item}{RESET}")
+            print(f"  {RED}✗ Not found: {item}{RESET}")
         else:
             valid_items.append(path)
 
     if not valid_items:
-        print(f"{RED}No valid files/folders to send{RESET}")
+        print(f"\n  {RED}No valid files/folders to send{RESET}")
+        print(f"\n  {DIM}Press Enter to close...{RESET}")
+        input()
         sys.exit(1)
 
     # Calculate total stats
@@ -149,15 +231,30 @@ def send_files(items):
         total_files += files
         total_size += size
 
-    print(f"{DIM}Total: {total_files} file(s), {format_size(total_size)}{RESET}\n")
+    draw_section("FILES TO SEND")
+    for path in valid_items:
+        if path.is_dir():
+            files, size = collect_stats(path)
+            print(f"    {BLUE}📁{RESET} {path.name}/ {DIM}({files} files, {format_size(size)}){RESET}")
+        else:
+            print(f"    {WHITE}📄{RESET} {path.name} {DIM}({format_size(path.stat().st_size)}){RESET}")
 
-    # Connect and upload
+    print(f"\n    {DIM}Total: {total_files} file(s), {format_size(total_size)}{RESET}")
+
+    # Connect
+    print()
+    draw_section("CONNECTING", YELLOW)
+    print(f"    {YELLOW}⟳{RESET} Connecting to {HOST}:{PORT}...")
+
+    overall_start = time.time()
+
     try:
-        print(f"{YELLOW}Connecting to {HOST}:{PORT}...{RESET}")
         ftp = ftplib.FTP()
         ftp.connect(HOST, PORT, timeout=10)
         ftp.login(USER, PASS)
-        print(f"{GREEN}✓ Connected{RESET}")
+        print(f"    {GREEN}✓{RESET} Connected successfully!\n")
+
+        draw_section("TRANSFERRING", GREEN)
 
         success = 0
         errors = 0
@@ -177,20 +274,16 @@ def send_files(items):
 
         ftp.quit()
 
-        print()
-        if errors == 0:
-            print(f"{GREEN}{BOLD}✓ Sent {success} file(s) successfully!{RESET}")
-        else:
-            print(f"{YELLOW}Sent {success} file(s), {errors} failed{RESET}")
+        total_time = time.time() - overall_start
+        draw_result_box(success, errors, total_time)
 
     except Exception as e:
-        print(f"{RED}Connection failed: {e}{RESET}")
-        print(f"\n{DIM}Press Enter to close...{RESET}")
+        print(f"    {RED}✗ Connection failed: {e}{RESET}")
+        print(f"\n  {DIM}Press Enter to close...{RESET}")
         input()
         sys.exit(1)
 
-    # Wait for user to close
-    print(f"\n{DIM}Press Enter to close...{RESET}")
+    print(f"\n  {DIM}Press Enter to close...{RESET}")
     input()
 
 if __name__ == "__main__":
