@@ -12,11 +12,13 @@ A terminal-based FTP file manager with a beautiful TUI (Text User Interface) for
 - **Dual-pane concept** - Switch between local and remote views with Tab
 - **Background transfers** - Non-blocking uploads/downloads with real-time progress bar
 - **Transfer speed display** - Monitor upload/download speeds in real-time
+- **Auto-reconnect** - Remembers last successful connection IP/port
 - **Full CRUD operations** - Create, Rename, Delete files and folders on both local and remote
 - **View & Edit** - View file contents or edit remote files directly
 - **Color-coded interface** - Blue theme for remote, Cyan for local - never confuse which side you're on!
 - **Confirmation modals** - Color-coded modals (red for delete, cyan for upload, green for download)
 - **Recursive operations** - Upload/download/delete entire folders
+- **Cancel transfers** - Press Ctrl+C to cancel ongoing transfers
 - **Dolphin integration** - Right-click "Send to FTP" option for KDE users
 
 ## Requirements
@@ -109,11 +111,17 @@ ftptool ftp://192.168.1.100:2121/
 ```
 
 **Workflow:**
-1. Press `c` to connect to the FTP server
-2. Use `Tab` to switch between LOCAL and REMOTE views
-3. Navigate with arrow keys, Enter to open folders
-4. In LOCAL view: press `u` to upload selected file
-5. In REMOTE view: press `d` to download selected file
+1. Connects automatically to last successful server (or default on first run)
+2. If connection fails, press `s` to change server address
+3. Use `Tab` to switch between LOCAL and REMOTE views
+4. Navigate with arrow keys, Enter to open folders
+5. In LOCAL view: press `u` to upload selected file
+6. In REMOTE view: press `d` to download selected file
+
+**Smart Connection Memory:**
+- Tools remember the last successful IP:port
+- Next time you run, it automatically uses the last working server
+- No need to edit config files when your phone's IP changes!
 
 ### Quick Send (ftpsend)
 
@@ -129,6 +137,17 @@ For quick uploads without the TUI:
 # Send entire folder (recursive)
 ./ftpsend.py ~/Documents/project/
 ```
+
+**Features:**
+- Shows styled progress bars with transfer speed
+- Press `Ctrl+C` to cancel transfer (auto-closes terminal)
+- If connection fails, choose to retry or change server
+- Remembers last successful connection
+
+**Dolphin Integration:**
+- Right-click file(s) → "Send to FTP Server"
+- Option to change IP before sending (shows current saved IP)
+- Just press Enter to use last successful connection
 
 ## Keyboard Shortcuts
 
