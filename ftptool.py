@@ -11,21 +11,44 @@ import tempfile
 import subprocess
 import threading
 import time
+import json
 from pathlib import Path
 
-# Default FTP settings - Change these to your FTP server
-DEFAULT_HOST = "192.168.0.103"  # Your FTP server IP
-DEFAULT_PORT = 9999             # Your FTP server port
+# Config file to remember last successful connection
+CONFIG_FILE = Path.home() / ".ftptool_config.json"
+
+# Default FTP settings
+DEFAULT_HOST = "192.168.0.103"
+DEFAULT_PORT = 9999
 DEFAULT_USER = "anonymous"
 DEFAULT_PASS = ""
+
+# Load last successful connection or use defaults
+def load_config():
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                return config.get('host', DEFAULT_HOST), config.get('port', DEFAULT_PORT)
+        except:
+            pass
+    return DEFAULT_HOST, DEFAULT_PORT
+
+def save_config(host, port):
+    """Save last successful connection"""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump({'host': host, 'port': port}, f)
+    except:
+        pass
 
 class FTPManager:
     def __init__(self, stdscr):
         self.stdscr = stdscr
         self.ftp = None
         self.connected = False
-        self.host = DEFAULT_HOST
-        self.port = DEFAULT_PORT
+        # Load last successful connection
+        self.host, self.port = load_config()
         self.local_dir = Path.home() / "Downloads"  # Start in Downloads
         self.remote_dir = "/"
         self.remote_files = []
@@ -148,6 +171,8 @@ class FTPManager:
             self.ftp.connect(self.host, self.port, timeout=10)
             self.ftp.login(DEFAULT_USER, DEFAULT_PASS)
             self.connected = True
+            # Save successful connection
+            save_config(self.host, self.port)
             self.refresh_remote()
             self.cursor = 0
             self.scroll_offset = 0

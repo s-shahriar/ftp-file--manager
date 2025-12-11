@@ -10,16 +10,42 @@ import os
 import time
 import signal
 import threading
+import json
 from pathlib import Path
 
 # Global cancel flag
 cancelled = False
 
-# Default FTP settings - Change these to your FTP server
-HOST = "192.168.0.103"  # Your FTP server IP
-PORT = 9999             # Your FTP server port
+# Config file to remember last successful connection
+CONFIG_FILE = Path.home() / ".ftpsend_config.json"
+
+# Default FTP settings
+DEFAULT_HOST = "192.168.0.103"
+DEFAULT_PORT = 9999
 USER = "anonymous"
 PASS = ""
+
+# Load last successful connection or use defaults
+def load_config():
+    if CONFIG_FILE.exists():
+        try:
+            with open(CONFIG_FILE, 'r') as f:
+                config = json.load(f)
+                return config.get('host', DEFAULT_HOST), config.get('port', DEFAULT_PORT)
+        except:
+            pass
+    return DEFAULT_HOST, DEFAULT_PORT
+
+def save_config(host, port):
+    """Save last successful connection"""
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            json.dump({'host': host, 'port': port}, f)
+    except:
+        pass
+
+# Load saved config
+HOST, PORT = load_config()
 
 # ANSI colors and styles
 GREEN = '\033[92m'
@@ -329,6 +355,9 @@ def send_files(items):
             ftp.connect(HOST, PORT, timeout=10)
             ftp.login(USER, PASS)
             print(f"    {GREEN}✓{RESET} Connected successfully!\n")
+
+            # Save successful connection
+            save_config(HOST, PORT)
             break  # Connection successful, exit loop
         except Exception as e:
             print(f"    {RED}✗ Connection failed: {e}{RESET}")
