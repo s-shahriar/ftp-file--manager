@@ -308,36 +308,63 @@ class FTPManager:
             self.set_message("Upload cancelled", "info")
             return
 
-        # Count files
-        file_count = sum(1 for _ in folder_path.rglob('*') if _.is_file())
+        # Count files and total size
+        file_count = 0
+        total_size = 0
+        for item in folder_path.rglob('*'):
+            if item.is_file():
+                file_count += 1
+                total_size += item.stat().st_size
 
         self.transfer_active = True
         self.transfer_filename = f"{folder_name}/ ({file_count} files)"
         self.transfer_action = "Uploading"
         self.transfer_progress = 0
-        self.transfer_total = 1  # We'll update this as we go
+        self.transfer_total = total_size
         self.transfer_cancelled = False
+        self.transfer_start_time = time.time()
+        self.transfer_last_time = time.time()
+        self.transfer_last_progress = 0
+        self.transfer_speed = 0
 
         def do_folder_upload():
             try:
                 transfer_ftp = ftplib.FTP()
                 transfer_ftp.connect(self.host, self.port, timeout=30)
                 transfer_ftp.login(DEFAULT_USER, DEFAULT_PASS)
+
+                # Change to target directory
                 transfer_ftp.cwd(self.remote_dir)
 
                 uploaded_count = [0]
 
-                def upload_recursive(local_path, remote_path=""):
+                def upload_recursive(local_path, remote_base_path):
+                    """Upload folder recursively
+                    local_path: Path object of local folder
+                    remote_base_path: Current remote path relative to initial self.remote_dir
+                    """
                     if self.transfer_cancelled:
                         raise Exception("Cancelled by user")
 
-                    # Create remote directory
-                    if remote_path:
-                        try:
-                            transfer_ftp.mkd(remote_path)
-                        except:
-                            pass
-                        transfer_ftp.cwd(self.remote_dir + '/' + remote_path if remote_path else self.remote_dir)
+                    # Create the remote directory for this folder
+                    # Go to parent directory first
+                    parent_parts = remote_base_path.split('/')[:-1] if '/' in remote_base_path else []
+                    if parent_parts:
+                        parent_path = '/'.join(parent_parts)
+                        full_parent = f"{self.remote_dir}/{parent_path}".rstrip('/')
+                    else:
+                        full_parent = self.remote_dir
+
+                    transfer_ftp.cwd(full_parent)
+
+                    # Create and enter the directory
+                    dir_name = remote_base_path.split('/')[-1]
+                    try:
+                        transfer_ftp.mkd(dir_name)
+                    except ftplib.error_perm:
+                        pass  # Directory may already exist
+
+                    transfer_ftp.cwd(dir_name)
 
                     # Upload files and recurse into subdirectories
                     for item in sorted(local_path.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
@@ -345,13 +372,21 @@ class FTPManager:
                             raise Exception("Cancelled by user")
 
                         if item.is_file():
+                            # Upload with progress callback
+                            def callback(data):
+                                if self.transfer_cancelled:
+                                    raise Exception("Cancelled by user")
+                                self.transfer_progress += len(data)
+
                             with open(item, 'rb') as f:
-                                transfer_ftp.storbinary(f"STOR {item.name}", f, blocksize=8192)
+                                transfer_ftp.storbinary(f"STOR {item.name}", f, blocksize=8192, callback=callback)
                             uploaded_count[0] += 1
                             self.transfer_filename = f"{folder_name}/ ({uploaded_count[0]}/{file_count})"
                         elif item.is_dir():
-                            new_remote = f"{remote_path}/{item.name}" if remote_path else item.name
-                            upload_recursive(item, new_remote)
+                            new_remote_path = f"{remote_base_path}/{item.name}"
+                            upload_recursive(item, new_remote_path)
+                            # Return to current directory after recursion
+                            transfer_ftp.cwd(f"{self.remote_dir}/{remote_base_path}".rstrip('/'))
 
                 upload_recursive(folder_path, folder_name)
 
