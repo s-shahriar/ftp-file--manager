@@ -233,7 +233,7 @@ class FTPManager:
             return
 
         if item['is_dir']:
-            self.set_message("Use 'U' to upload folders", "info")
+            self.upload_folder_selected()
             return
 
         # Confirm upload - show target remote folder
@@ -285,6 +285,88 @@ class FTPManager:
                 self.transfer_active = False
 
         self.transfer_thread = threading.Thread(target=do_upload, daemon=True)
+        self.transfer_thread.start()
+
+    def upload_folder_selected(self):
+        """Upload entire folder recursively"""
+        if not self.connected:
+            self.set_message("Not connected", "error")
+            return
+        if self.transfer_active:
+            self.set_message("Transfer already in progress", "error")
+            return
+
+        item = self.get_selected_item()
+        if not item or item['name'] == '..' or not item['is_dir']:
+            return
+
+        folder_path = item['path']
+        folder_name = item['name']
+
+        # Confirm upload
+        if not self.confirm(f"Upload folder '{folder_name}/' to {self.remote_dir}?", "upload"):
+            self.set_message("Upload cancelled", "info")
+            return
+
+        # Count files
+        file_count = sum(1 for _ in folder_path.rglob('*') if _.is_file())
+
+        self.transfer_active = True
+        self.transfer_filename = f"{folder_name}/ ({file_count} files)"
+        self.transfer_action = "Uploading"
+        self.transfer_progress = 0
+        self.transfer_total = 1  # We'll update this as we go
+        self.transfer_cancelled = False
+
+        def do_folder_upload():
+            try:
+                transfer_ftp = ftplib.FTP()
+                transfer_ftp.connect(self.host, self.port, timeout=30)
+                transfer_ftp.login(DEFAULT_USER, DEFAULT_PASS)
+                transfer_ftp.cwd(self.remote_dir)
+
+                uploaded_count = [0]
+
+                def upload_recursive(local_path, remote_path=""):
+                    if self.transfer_cancelled:
+                        raise Exception("Cancelled by user")
+
+                    # Create remote directory
+                    if remote_path:
+                        try:
+                            transfer_ftp.mkd(remote_path)
+                        except:
+                            pass
+                        transfer_ftp.cwd(self.remote_dir + '/' + remote_path if remote_path else self.remote_dir)
+
+                    # Upload files and recurse into subdirectories
+                    for item in sorted(local_path.iterdir(), key=lambda x: (x.is_file(), x.name.lower())):
+                        if self.transfer_cancelled:
+                            raise Exception("Cancelled by user")
+
+                        if item.is_file():
+                            with open(item, 'rb') as f:
+                                transfer_ftp.storbinary(f"STOR {item.name}", f, blocksize=8192)
+                            uploaded_count[0] += 1
+                            self.transfer_filename = f"{folder_name}/ ({uploaded_count[0]}/{file_count})"
+                        elif item.is_dir():
+                            new_remote = f"{remote_path}/{item.name}" if remote_path else item.name
+                            upload_recursive(item, new_remote)
+
+                upload_recursive(folder_path, folder_name)
+
+                transfer_ftp.quit()
+                self.refresh_remote()
+                self.set_message(f"Uploaded folder: {folder_name}/ ({uploaded_count[0]} files)", "success")
+            except Exception as e:
+                if "Cancelled" in str(e):
+                    self.set_message("Upload cancelled", "info")
+                else:
+                    self.set_message(f"Upload failed: {e}", "error")
+            finally:
+                self.transfer_active = False
+
+        self.transfer_thread = threading.Thread(target=do_folder_upload, daemon=True)
         self.transfer_thread.start()
 
     def download_selected(self):
@@ -728,9 +810,9 @@ class FTPManager:
         help_y = h - 2
         if self.connected:
             if self.mode == "remote":
-                help_text = " ↑↓:Nav │ Enter:Open │ d:Download │ D:Delete │ r:Rename │ m:Mkdir │ v:View │ e:Edit │ Tab:Local │ c:Disc │ q:Quit "
+                help_text = " ↑↓:Nav │ Enter:Open │ d:Down │ D:Del │ r:Rename │ m:Mkdir │ /:Search │ v:View │ e:Edit │ Tab:Local │ c:Disc │ q:Quit "
             else:
-                help_text = " ↑↓:Nav │ Enter:Open │ u:Upload │ D:Delete │ r:Rename │ m:Mkdir │ Tab:Remote │ c:Disc │ q:Quit "
+                help_text = " ↑↓:Nav │ Enter:Open │ u:Upload │ D:Del │ r:Rename │ m:Mkdir │ /:Search │ Tab:Remote │ c:Disc │ q:Quit "
         else:
             help_text = " c:Connect │ s:Set Server │ Tab:Switch View │ q:Quit "
         try:
@@ -843,6 +925,29 @@ class FTPManager:
 
         return result
 
+    def search_files(self):
+        """Search for files in current view"""
+        query = self.get_input("Search: ")
+        if not query:
+            return
+
+        query_lower = query.lower()
+        items = self.get_current_list()
+
+        # Find matches
+        matches = []
+        for idx, item in enumerate(items):
+            if item['name'] != '..' and query_lower in item['name'].lower():
+                matches.append(idx)
+
+        if not matches:
+            self.set_message(f"No results for '{query}'", "info")
+            return
+
+        # Jump to first match
+        self.cursor = matches[0]
+        self.set_message(f"Found {len(matches)} result(s) for '{query}'", "success")
+
     def run(self):
         self.refresh_local()
 
@@ -952,6 +1057,9 @@ class FTPManager:
                 else:
                     self.refresh_local()
                 self.set_message("Refreshed", "info")
+
+            elif key == ord('f') or key == ord('/'):  # Search
+                self.search_files()
 
 def main(stdscr):
     manager = FTPManager(stdscr)
