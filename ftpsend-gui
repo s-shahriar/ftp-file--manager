@@ -1,0 +1,68 @@
+#!/bin/bash
+# Wrapper to run ftpsend in a terminal with optional IP prompt
+
+CONFIG_FILE="$HOME/.ftpsend_config.json"
+DEFAULT_HOST="192.168.0.103"
+DEFAULT_PORT="9999"
+
+# Load last successful connection
+if [ -f "$CONFIG_FILE" ]; then
+    CURRENT_HOST=$(grep -oP '"host":\s*"\K[^"]+' "$CONFIG_FILE" 2>/dev/null || echo "$DEFAULT_HOST")
+    CURRENT_PORT=$(grep -oP '"port":\s*\K[0-9]+' "$CONFIG_FILE" 2>/dev/null || echo "$DEFAULT_PORT")
+else
+    CURRENT_HOST="$DEFAULT_HOST"
+    CURRENT_PORT="$DEFAULT_PORT"
+fi
+
+# Create a temp script that will run inside konsole
+TEMP_SCRIPT=$(mktemp)
+
+# Write the script content
+cat > "$TEMP_SCRIPT" <<EOFSCRIPT
+#!/bin/bash
+
+CONFIG_FILE="\$HOME/.ftpsend_config.json"
+CURRENT_HOST="$CURRENT_HOST"
+CURRENT_PORT="$CURRENT_PORT"
+
+echo ""
+echo "  ╭────────────────────────────────────────────────╮"
+echo "  │         📤  FTP FILE SENDER                    │"
+echo "  ╰────────────────────────────────────────────────╯"
+echo ""
+echo "  Current server: \$CURRENT_HOST:\$CURRENT_PORT"
+echo ""
+echo "  Options:"
+echo "    [Enter] - Send to \$CURRENT_HOST:\$CURRENT_PORT"
+echo "    [c]     - Change server address"
+echo ""
+read -p "  > " -n1 choice
+echo ""
+
+if [[ "\$choice" == "c" || "\$choice" == "C" ]]; then
+    echo ""
+    read -e -i "\$CURRENT_HOST" -p "  Server IP: " NEW_HOST
+    NEW_HOST="\${NEW_HOST:-\$CURRENT_HOST}"
+
+    read -e -i "\$CURRENT_PORT" -p "  Port: " NEW_PORT
+    NEW_PORT="\${NEW_PORT:-\$CURRENT_PORT}"
+
+    # Update config file temporarily
+    echo "{\"host\":\"\$NEW_HOST\",\"port\":\$NEW_PORT}" > "\$CONFIG_FILE"
+
+    echo ""
+    echo "  Server set to \$NEW_HOST:\$NEW_PORT"
+    echo ""
+fi
+
+# Run ftpsend with all the file arguments passed to this script
+exec /home/syed/bin/ftpsend "\$@"
+EOFSCRIPT
+
+chmod +x "$TEMP_SCRIPT"
+
+# Run in konsole, passing all arguments properly
+konsole -e "$TEMP_SCRIPT" "$@"
+
+# Clean up temp script after konsole closes
+rm -f "$TEMP_SCRIPT"

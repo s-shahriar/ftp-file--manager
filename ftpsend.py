@@ -11,6 +11,7 @@ import time
 import signal
 import threading
 import json
+import readline
 from pathlib import Path
 
 # Global cancel flag
@@ -112,13 +113,20 @@ def draw_section(title, color=CYAN):
 
 def get_input(prompt, default=""):
     """Get user input with optional default value prefilled"""
+    def prefill_hook():
+        readline.insert_text(default)
+        readline.redisplay()
+
     if default:
-        print(f"  {prompt}{DIM}(current: {default}){RESET}")
+        print(f"  {prompt}")
         print(f"  {CYAN}>{RESET} ", end="")
+        readline.set_startup_hook(prefill_hook)
         try:
             value = input().strip()
+            readline.set_startup_hook()
             return value if value else default
         except (EOFError, KeyboardInterrupt):
+            readline.set_startup_hook()
             return default
     else:
         print(f"  {prompt}")
@@ -147,7 +155,7 @@ def change_server():
 
     print(f"\n  {GREEN}✓{RESET} Server set to {HOST}:{PORT}")
 
-def progress_bar(current, total, filename, start_time, width=30):
+def progress_bar(current, total, filename, start_time, queue_info="", width=30):
     percent = current / total if total > 0 else 1
     filled = int(width * percent)
     bar = '█' * filled + '░' * (width - filled)
@@ -161,10 +169,13 @@ def progress_bar(current, total, filename, start_time, width=30):
     size_info = f"{format_size(current)}/{format_size(total)}"
 
     # Truncate filename if too long
-    max_name = 20
+    max_name = 18 if queue_info else 20
     display_name = filename[:max_name-2] + '..' if len(filename) > max_name else filename
 
-    sys.stdout.write(f'\r    {WHITE}{display_name:<20}{RESET} {CYAN}[{bar}]{RESET} {GREEN}{percent:>5.1%}{RESET} {DIM}{size_info} @ {speed_str}{RESET}')
+    # Add queue info if provided
+    prefix = f"{CYAN}{queue_info}{RESET} " if queue_info else ""
+
+    sys.stdout.write(f'\r    {prefix}{WHITE}{display_name:<{max_name}}{RESET} {CYAN}[{bar}]{RESET} {GREEN}{percent:>5.1%}{RESET} {DIM}{size_info} @ {speed_str}{RESET}')
     sys.stdout.flush()
 
 def ensure_remote_dir(ftp, remote_path):
@@ -183,7 +194,7 @@ def ensure_remote_dir(ftp, remote_path):
             except ftplib.error_perm:
                 pass
 
-def upload_file(ftp, local_path, remote_dir=""):
+def upload_file(ftp, local_path, remote_dir="", queue_info=""):
     """Upload a single file with progress bar"""
     global cancelled
     if cancelled:
@@ -197,7 +208,7 @@ def upload_file(ftp, local_path, remote_dir=""):
         if cancelled:
             raise Exception("Cancelled")
         uploaded[0] += len(data)
-        progress_bar(uploaded[0], file_size, local_path.name, start_time)
+        progress_bar(uploaded[0], file_size, local_path.name, start_time, queue_info)
 
     if remote_dir:
         ensure_remote_dir(ftp, remote_dir)
@@ -211,7 +222,7 @@ def upload_file(ftp, local_path, remote_dir=""):
     elapsed = time.time() - start_time
     print(f" {GREEN}✓{RESET} {DIM}({elapsed:.1f}s){RESET}")
 
-def upload_folder(ftp, folder_path, base_remote=""):
+def upload_folder(ftp, folder_path, base_remote="", queue_info=""):
     """Recursively upload a folder"""
     global cancelled
     if cancelled:
@@ -232,7 +243,7 @@ def upload_folder(ftp, folder_path, base_remote=""):
             break
         if item.is_file():
             try:
-                upload_file(ftp, item, remote_base)
+                upload_file(ftp, item, remote_base, queue_info)
                 files_uploaded += 1
             except Exception as e:
                 if "Cancelled" not in str(e):
@@ -240,7 +251,7 @@ def upload_folder(ftp, folder_path, base_remote=""):
                     errors += 1
                 break
         elif item.is_dir():
-            sub_uploaded, sub_errors = upload_folder(ftp, item, remote_base)
+            sub_uploaded, sub_errors = upload_folder(ftp, item, remote_base, queue_info)
             files_uploaded += sub_uploaded
             errors += sub_errors
 
@@ -386,13 +397,21 @@ def send_files(items):
     success = 0
     errors = 0
 
+    # Show queue info if multiple items
+    total_items = len(valid_items)
+    show_queue = total_items > 1
+
     try:
-        for path in valid_items:
+        for idx, path in enumerate(valid_items):
             if cancelled:
                 break
+
+            # Generate queue info
+            queue_info = f"[{idx + 1}/{total_items}]" if show_queue else ""
+
             if path.is_file():
                 try:
-                    upload_file(ftp, path)
+                    upload_file(ftp, path, queue_info=queue_info)
                     success += 1
                 except Exception as e:
                     if "Cancelled" not in str(e):
@@ -400,7 +419,7 @@ def send_files(items):
                         errors += 1
                     break
             elif path.is_dir():
-                uploaded, errs = upload_folder(ftp, path)
+                uploaded, errs = upload_folder(ftp, path, queue_info=queue_info)
                 success += uploaded
                 errors += errs
 

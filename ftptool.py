@@ -59,6 +59,13 @@ class FTPManager:
         self.message = ""
         self.message_type = "info"  # "info", "success", "error"
 
+        # Multiple selection
+        self.selected_files = set()  # Set of selected file names in current view
+
+        # Transfer queue
+        self.transfer_queue = []  # List of items to transfer
+        self.current_queue_index = 0
+
         # Background transfer state
         self.transfer_active = False
         self.transfer_progress = 0
@@ -163,6 +170,48 @@ class FTPManager:
             return items[self.cursor]
         return None
 
+    def toggle_selection(self):
+        """Toggle selection of current file"""
+        item = self.get_selected_item()
+        if not item or item['name'] == '..':
+            return
+
+        # Create a unique key for the file
+        if self.mode == "remote":
+            file_key = f"remote:{self.remote_dir}/{item['name']}"
+        else:
+            file_key = f"local:{item['path']}"
+
+        if file_key in self.selected_files:
+            self.selected_files.remove(file_key)
+            self.set_message(f"Deselected: {item['name']}", "info")
+        else:
+            self.selected_files.add(file_key)
+            self.set_message(f"Selected: {item['name']} ({len(self.selected_files)} total)", "success")
+
+    def clear_selection(self):
+        """Clear all selections"""
+        self.selected_files.clear()
+
+    def get_selected_items(self):
+        """Get list of selected items in current view"""
+        items = self.get_current_list()
+        selected = []
+
+        for item in items:
+            if item['name'] == '..':
+                continue
+
+            if self.mode == "remote":
+                file_key = f"remote:{self.remote_dir}/{item['name']}"
+            else:
+                file_key = f"local:{item['path']}"
+
+            if file_key in self.selected_files:
+                selected.append(item)
+
+        return selected
+
     def connect(self):
         try:
             self.set_message(f"Connecting to {self.host}:{self.port}...", "info")
@@ -228,28 +277,71 @@ class FTPManager:
             self.set_message("Transfer already in progress", "error")
             return
 
-        item = self.get_selected_item()
-        if not item or item['name'] == '..':
+        # Check if there are selected files
+        selected_items = self.get_selected_items()
+
+        if selected_items:
+            # Build queue from selected files (exclude folders for now)
+            self.transfer_queue = [item for item in selected_items if not item['is_dir']]
+
+            if not self.transfer_queue:
+                self.set_message("No files selected (folders not supported in batch)", "error")
+                return
+
+            # Confirm upload
+            file_count = len(self.transfer_queue)
+            if not self.confirm(f"Upload {file_count} file(s) to {self.remote_dir}?", "upload"):
+                self.set_message("Upload cancelled", "info")
+                return
+
+            # Clear selection after confirmation
+            self.clear_selection()
+
+            # Start queue processing
+            self.current_queue_index = 0
+            self.process_upload_queue()
+        else:
+            # Single file upload
+            item = self.get_selected_item()
+            if not item or item['name'] == '..':
+                return
+
+            if item['is_dir']:
+                self.upload_folder_selected()
+                return
+
+            # Single file - put in queue
+            self.transfer_queue = [item]
+            self.current_queue_index = 0
+
+            # Confirm upload - show target remote folder
+            if not self.confirm(f"Upload '{item['name']}' to {self.remote_dir}?", "upload"):
+                self.set_message("Upload cancelled", "info")
+                return
+
+            self.process_upload_queue()
+
+    def process_upload_queue(self):
+        """Process the upload queue one file at a time"""
+        if self.current_queue_index >= len(self.transfer_queue):
+            # Queue finished
+            self.set_message(f"Uploaded {len(self.transfer_queue)} file(s)", "success")
+            self.transfer_queue = []
+            self.refresh_remote()
             return
 
-        if item['is_dir']:
-            self.upload_folder_selected()
-            return
-
-        # Confirm upload - show target remote folder
-        if not self.confirm(f"Upload '{item['name']}' to {self.remote_dir}?", "upload"):
-            self.set_message("Upload cancelled", "info")
-            return
-
+        item = self.transfer_queue[self.current_queue_index]
         filepath = item['path']
         file_size = filepath.stat().st_size
         filename = item['name']
+
+        queue_info = f"[{self.current_queue_index + 1}/{len(self.transfer_queue)}]"
 
         # Setup transfer state
         self.transfer_active = True
         self.transfer_progress = 0
         self.transfer_total = file_size
-        self.transfer_filename = filename
+        self.transfer_filename = f"{queue_info} {filename}"
         self.transfer_action = "Uploading"
         self.transfer_cancelled = False
         self.transfer_start_time = time.time()
@@ -274,15 +366,21 @@ class FTPManager:
                     transfer_ftp.storbinary(f"STOR {filename}", f, blocksize=8192, callback=callback)
 
                 transfer_ftp.quit()
-                self.refresh_remote()
-                self.set_message(f"Uploaded: {filename} ({self.format_size(file_size).strip()})", "success")
+
+                # Move to next file in queue (will set transfer_active=False if done)
+                self.transfer_active = False  # Turn off before starting next
+                self.current_queue_index += 1
+                self.process_upload_queue()
             except Exception as e:
+                self.transfer_active = False
                 if "Cancelled" in str(e):
                     self.set_message("Upload cancelled", "info")
+                    self.transfer_queue = []  # Clear queue on cancel
                 else:
-                    self.set_message(f"Upload failed: {e}", "error")
-            finally:
-                self.transfer_active = False
+                    self.set_message(f"Upload failed ({filename}): {e}", "error")
+                    # Continue with next file even on error
+                    self.current_queue_index += 1
+                    self.process_upload_queue()
 
         self.transfer_thread = threading.Thread(target=do_upload, daemon=True)
         self.transfer_thread.start()
@@ -415,25 +513,68 @@ class FTPManager:
             self.set_message("Transfer already in progress", "error")
             return
 
-        item = self.get_selected_item()
-        if not item or item['name'] == '..' or item['is_dir']:
+        # Check if there are selected files
+        selected_items = self.get_selected_items()
+
+        if selected_items:
+            # Build queue from selected files (exclude folders)
+            self.transfer_queue = [item for item in selected_items if not item['is_dir']]
+
+            if not self.transfer_queue:
+                self.set_message("No files selected (folders not supported in batch)", "error")
+                return
+
+            # Confirm download
+            file_count = len(self.transfer_queue)
+            if not self.confirm(f"Download {file_count} file(s) to {self.local_dir}?", "download"):
+                self.set_message("Download cancelled", "info")
+                return
+
+            # Clear selection after confirmation
+            self.clear_selection()
+
+            # Start queue processing
+            self.current_queue_index = 0
+            self.process_download_queue()
+        else:
+            # Single file download
+            item = self.get_selected_item()
+            if not item or item['name'] == '..' or item['is_dir']:
+                return
+
+            # Single file - put in queue
+            self.transfer_queue = [item]
+            self.current_queue_index = 0
+
+            # Confirm download
+            if not self.confirm(f"Download '{item['name']}' to {self.local_dir}?", "download"):
+                self.set_message("Download cancelled", "info")
+                return
+
+            self.process_download_queue()
+
+    def process_download_queue(self):
+        """Process the download queue one file at a time"""
+        if self.current_queue_index >= len(self.transfer_queue):
+            # Queue finished
+            self.set_message(f"Downloaded {len(self.transfer_queue)} file(s)", "success")
+            self.transfer_queue = []
+            self.refresh_local()
             return
 
-        # Confirm download
-        if not self.confirm(f"Download '{item['name']}' to {self.local_dir}?", "download"):
-            self.set_message("Download cancelled", "info")
-            return
-
+        item = self.transfer_queue[self.current_queue_index]
         file_size = item['size']
         filename = item['name']
         local_path = self.local_dir / filename
         remote_dir = self.remote_dir
 
+        queue_info = f"[{self.current_queue_index + 1}/{len(self.transfer_queue)}]"
+
         # Setup transfer state
         self.transfer_active = True
         self.transfer_progress = 0
         self.transfer_total = file_size
-        self.transfer_filename = filename
+        self.transfer_filename = f"{queue_info} {filename}"
         self.transfer_action = "Downloading"
         self.transfer_cancelled = False
         self.transfer_start_time = time.time()
@@ -459,19 +600,25 @@ class FTPManager:
                     transfer_ftp.retrbinary(f"RETR {filename}", callback, blocksize=8192)
 
                 transfer_ftp.quit()
-                self.refresh_local()
-                self.set_message(f"Downloaded: {filename} to {self.local_dir}", "success")
+
+                # Move to next file in queue (will set transfer_active=False if done)
+                self.transfer_active = False  # Turn off before starting next
+                self.current_queue_index += 1
+                self.process_download_queue()
             except Exception as e:
+                self.transfer_active = False
                 if "Cancelled" in str(e):
                     try:
                         local_path.unlink()
                     except:
                         pass
                     self.set_message("Download cancelled", "info")
+                    self.transfer_queue = []  # Clear queue on cancel
                 else:
-                    self.set_message(f"Download failed: {e}", "error")
-            finally:
-                self.transfer_active = False
+                    self.set_message(f"Download failed ({filename}): {e}", "error")
+                    # Continue with next file even on error
+                    self.current_queue_index += 1
+                    self.process_download_queue()
 
         self.transfer_thread = threading.Thread(target=do_download, daemon=True)
         self.transfer_thread.start()
@@ -815,9 +962,20 @@ class FTPManager:
 
             if idx < len(items):
                 item = items[idx]
-                is_selected = (idx == self.cursor)
+                is_cursor_here = (idx == self.cursor)
 
-                # Format line
+                # Check if file is marked for selection
+                if item['name'] != '..':
+                    if self.mode == "remote":
+                        file_key = f"remote:{self.remote_dir}/{item['name']}"
+                    else:
+                        file_key = f"local:{item['path']}"
+                    is_marked = file_key in self.selected_files
+                else:
+                    is_marked = False
+
+                # Format line with checkmark if selected
+                mark = "✓ " if is_marked else "  "
                 if item['is_dir']:
                     icon = "📁 "
                     name = item['name'] + "/"
@@ -827,14 +985,14 @@ class FTPManager:
                     name = item['name']
                     size_str = self.format_size(item['size'])
 
-                line = f" {icon}{name}"
+                line = f"{mark}{icon}{name}"
                 padding = w - len(line) - len(size_str) - 2
                 if padding > 0:
                     line += " " * padding + size_str + " "
                 else:
                     line = line[:w-1]
 
-                if is_selected:
+                if is_cursor_here:
                     self.stdscr.addnstr(y, 0, line.ljust(w), w, selected_color | curses.A_BOLD)
                 elif item['is_dir']:
                     self.stdscr.addnstr(y, 0, line, w, dir_color)
@@ -845,9 +1003,9 @@ class FTPManager:
         help_y = h - 2
         if self.connected:
             if self.mode == "remote":
-                help_text = " ↑↓:Nav │ Enter:Open │ d:Down │ D:Del │ r:Rename │ m:Mkdir │ /:Search │ v:View │ e:Edit │ Tab:Local │ c:Disc │ q:Quit "
+                help_text = " ↑↓:Nav │ Space:Mark │ d:Down │ D:Del │ /:Search │ v:View │ e:Edit │ Tab:Local │ c:Disc │ q:Quit "
             else:
-                help_text = " ↑↓:Nav │ Enter:Open │ u:Upload │ D:Del │ r:Rename │ m:Mkdir │ /:Search │ Tab:Remote │ c:Disc │ q:Quit "
+                help_text = " ↑↓:Nav │ Space:Mark │ u:Upload │ D:Del │ /:Search │ Tab:Remote │ c:Disc │ q:Quit "
         else:
             help_text = " c:Connect │ s:Set Server │ Tab:Switch View │ q:Quit "
         try:
@@ -1034,6 +1192,9 @@ class FTPManager:
 
             elif key == curses.KEY_END:
                 self.cursor = max_cursor
+
+            elif key == ord(' '):  # Spacebar - toggle selection
+                self.toggle_selection()
 
             elif key in (curses.KEY_ENTER, 10, 13, curses.KEY_RIGHT, ord('l')):
                 self.enter_directory()

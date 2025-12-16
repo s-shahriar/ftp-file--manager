@@ -6,4 +6,4 @@ Actions=sendtoftp
 [Desktop Action sendtoftp]
 Name=Send to FTP Server
 Icon=folder-remote
-Exec=/path/to/ftpsend.py %F
+Exec=/home/YOUR_USERNAME/bin/ftpsend-gui %F
