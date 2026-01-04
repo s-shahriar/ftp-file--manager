@@ -25,35 +25,63 @@ CONFIG_FILE="\$HOME/.ftpsend_config.json"
 CURRENT_HOST="$CURRENT_HOST"
 CURRENT_PORT="$CURRENT_PORT"
 
+# Colors
+RESET="\033[0m"
+BOLD="\033[1m"
+DIM="\033[2m"
+
+# Vibrant colors
+CYAN="\033[96m"
+GREEN="\033[92m"
+YELLOW="\033[93m"
+MAGENTA="\033[95m"
+PURPLE="\033[38;5;141m"
+ORANGE="\033[38;5;208m"
+WHITE="\033[97m"
+GRAY="\033[90m"
+
+clear
 echo ""
-echo "  ╭────────────────────────────────────────────────╮"
-echo "  │         📤  FTP FILE SENDER                    │"
-echo "  ╰────────────────────────────────────────────────╯"
 echo ""
-echo "  Current server: \$CURRENT_HOST:\$CURRENT_PORT"
 echo ""
-echo "  Options:"
-echo "    [Enter] - Send to \$CURRENT_HOST:\$CURRENT_PORT"
-echo "    [c]     - Change server address"
+echo -e "    \${BOLD}\${PURPLE}╔════════════════════════════════════════════════════════╗\${RESET}"
+echo -e "    \${BOLD}\${PURPLE}║\${RESET}                                                        \${BOLD}\${PURPLE}║\${RESET}"
+echo -e "    \${BOLD}\${PURPLE}║\${RESET}            \${BOLD}\${WHITE}S E R V E R   C O N F I G\${RESET}                \${BOLD}\${PURPLE}║\${RESET}"
+echo -e "    \${BOLD}\${PURPLE}║\${RESET}                                                        \${BOLD}\${PURPLE}║\${RESET}"
+echo -e "    \${BOLD}\${PURPLE}╚════════════════════════════════════════════════════════╝\${RESET}"
 echo ""
-read -p "  > " -n1 choice
+echo ""
+echo -e "        \${DIM}Current: \${CYAN}\$CURRENT_HOST\${RESET}:\${YELLOW}\$CURRENT_PORT\${RESET}"
+echo ""
+echo ""
 echo ""
 
-if [[ "\$choice" == "c" || "\$choice" == "C" ]]; then
-    echo ""
-    read -e -i "\$CURRENT_HOST" -p "  Server IP: " NEW_HOST
-    NEW_HOST="\${NEW_HOST:-\$CURRENT_HOST}"
+# Server IP with proper spacing
+echo -n "        "
+echo -n \$'\033[1m\033[96m'"Server IP:"
+echo -n \$'\033[0m'"  "
+read -e -i "\$CURRENT_HOST" NEW_HOST
+NEW_HOST="\${NEW_HOST:-\$CURRENT_HOST}"
 
-    read -e -i "\$CURRENT_PORT" -p "  Port: " NEW_PORT
-    NEW_PORT="\${NEW_PORT:-\$CURRENT_PORT}"
+echo ""
+echo ""
 
-    # Update config file temporarily
-    echo "{\"host\":\"\$NEW_HOST\",\"port\":\$NEW_PORT}" > "\$CONFIG_FILE"
+# Port with proper spacing
+echo -n "        "
+echo -n \$'\033[1m\033[96m'"Port:      "
+echo -n \$'\033[0m'"  "
+read -e -i "\$CURRENT_PORT" NEW_PORT
+NEW_PORT="\${NEW_PORT:-\$CURRENT_PORT}"
 
-    echo ""
-    echo "  Server set to \$NEW_HOST:\$NEW_PORT"
-    echo ""
-fi
+# Update config file
+echo "{\"host\":\"\$NEW_HOST\",\"port\":\$NEW_PORT}" > "\$CONFIG_FILE"
+
+echo ""
+echo ""
+echo -e "        \${BOLD}\${GREEN}✓\${RESET} Configuration saved!"
+echo -e "        \${GRAY}Server set to:\${RESET} \${CYAN}\$NEW_HOST\${RESET}:\${YELLOW}\$NEW_PORT\${RESET}"
+echo ""
+sleep 1
 
 # Run ftpsend with all the file arguments passed to this script
 exec /home/syed/bin/ftpsend "\$@"

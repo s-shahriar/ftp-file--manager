@@ -1275,12 +1275,15 @@ def main(stdscr):
             else:
                 manager.host = arg
 
-    # Auto-connect on startup
+    # Always prompt for server configuration first
+    manager.set_server()
+
+    # Then connect with the configured server
     manager.connect()
 
-    # If connection failed, prompt for server address
+    # If connection failed, show error message
     if not manager.connected:
-        manager.set_message("Connection failed. Press 's' to set server address.", "error")
+        manager.set_message("Connection failed. Press 's' to change server or 'c' to retry.", "error")
 
     manager.run()
 
